@@ -1,0 +1,11 @@
+(library
+ (name memory_bank)
+ (libraries
+  dream
+  sqlite3
+  uuidm
+  yojson
+  lwt
+  lwt.unix
+  unix)
+ (preprocess (pps ppx_deriving_yojson lwt_ppx)))

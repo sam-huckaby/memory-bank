@@ -1,0 +1,11 @@
+# Build artifacts
+_build/
+
+# Dummy photo storage value for local testing
+photos/
+
+# SQLite DB that will be initialized wherever the server is run
+photos.db
+
+# Let's not keep environment variables in store
+.env
