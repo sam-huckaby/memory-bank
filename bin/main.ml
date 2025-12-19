@@ -118,6 +118,53 @@ let handle_upload_photo state request =
   | _ ->
       Dream.json ~status:`Bad_Request {|{"error": "Invalid multipart form data"}|}
 
+(** CORS middleware to handle cross-origin requests *)
+let cors_middleware allowed_origins handler request =
+  (* Check if this is a preflight OPTIONS request *)
+  if Dream.method_ request = `OPTIONS then
+    (* Handle preflight request *)
+    let origin = Dream.header request "Origin" in
+    let should_allow = match origin with
+      | None -> false
+      | Some origin_val ->
+          List.mem "*" allowed_origins || List.mem origin_val allowed_origins
+    in
+    if should_allow then
+      let origin_header = match origin with
+        | Some o when not (List.mem "*" allowed_origins) -> o
+        | _ -> "*"
+      in
+      Dream.respond ~status:`No_Content
+        ~headers:[
+          ("Access-Control-Allow-Origin", origin_header);
+          ("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+          ("Access-Control-Allow-Headers", "Content-Type");
+          ("Access-Control-Max-Age", "86400");
+        ]
+        ""
+    else
+      Dream.respond ~status:`No_Content ""
+  else
+    (* Regular request - add CORS headers to response *)
+    let* response = handler request in
+    let origin = Dream.header request "Origin" in
+    let should_allow = match origin with
+      | None -> false
+      | Some origin_val ->
+          List.mem "*" allowed_origins || List.mem origin_val allowed_origins
+    in
+    if should_allow then
+      let origin_header = match origin with
+        | Some o when not (List.mem "*" allowed_origins) -> o
+        | _ -> "*"
+      in
+      Dream.add_header response "Access-Control-Allow-Origin" origin_header;
+      Dream.add_header response "Access-Control-Allow-Methods" "GET, POST, OPTIONS";
+      Dream.add_header response "Access-Control-Allow-Headers" "Content-Type";
+      Lwt.return response
+    else
+      Lwt.return response
+
 (** Setup routes *)
 let routes state = [
   Dream.get "/api/playlist" (handle_playlist state);
@@ -152,5 +199,6 @@ let () =
   
   Dream.run ~port:config.port
   @@ Dream.logger
+  @@ cors_middleware config.cors_allowed_origins
   @@ Dream.memory_sessions
   @@ Dream.router (routes state)

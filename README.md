@@ -60,6 +60,9 @@ export DATABASE_PATH=/path/to/photos.db
 
 # Optional: Server port (default: 8080)
 export PORT=8080
+
+# Optional: CORS allowed origins (default: * allows all origins)
+export CORS_ALLOWED_ORIGINS=*
 ```
 
 Or create a `.env` file (see `.env.example`).
@@ -74,9 +77,54 @@ The server will start and display:
 ```
 [INFO] Photo storage: /path/to/photos
 [INFO] Database: /path/to/photos.db
+[INFO] Port: 8080
+[INFO] CORS allowed origins: *
 [INFO] Server starting on http://localhost:8080
 [INFO] Ready to serve photos!
 ```
+
+## CORS Configuration
+
+The server supports Cross-Origin Resource Sharing (CORS) to allow requests from web applications and mobile apps running on different origins.
+
+### Default Behavior
+
+By default, **all origins are allowed** (`CORS_ALLOWED_ORIGINS=*`). This is suitable for home network deployments where the server is not exposed to the internet.
+
+### Custom Origins
+
+For added security, you can restrict access to specific origins by setting the `CORS_ALLOWED_ORIGINS` environment variable:
+
+**Single origin (web app on localhost):**
+```bash
+export CORS_ALLOWED_ORIGINS=http://localhost:3000
+```
+
+**Multiple origins (web app + local network access):**
+```bash
+export CORS_ALLOWED_ORIGINS=http://localhost:3000,http://192.168.1.5:3000
+```
+
+**Android app access:**
+Android apps should use your server's local network IP address. For example, if your server runs on `192.168.1.100:8080`, the Android app would make requests to `http://192.168.1.100:8080/api/photos`.
+
+Native mobile apps are not subject to browser CORS restrictions, but you may still want to include their origins in the whitelist for consistency.
+
+**Future HTTPS support:**
+When running behind HTTPS, update your origins accordingly:
+```bash
+export CORS_ALLOWED_ORIGINS=https://myapp.com,https://192.168.1.100:8443
+```
+
+### CORS Headers
+
+The server automatically adds the following headers to matching origins:
+- `Access-Control-Allow-Origin`: The matching origin or `*`
+- `Access-Control-Allow-Methods`: `GET, POST, OPTIONS`
+- `Access-Control-Allow-Headers`: `Content-Type`
+- `Access-Control-Max-Age`: `86400` (24-hour preflight cache)
+
+---
 
 ## API Endpoints
 

@@ -3,6 +3,7 @@ type t = {
   photo_storage_path : string;
   database_path : string;
   port : int;
+  cors_allowed_origins : string list;
 }
 
 (** Get environment variable with optional default *)
@@ -35,7 +36,16 @@ let load () : t =
       failwith "PORT must be a valid integer"
   in
   
-  { photo_storage_path; database_path; port }
+  (* Optional: CORS allowed origins *)
+  let cors_allowed_origins =
+    let origins_str = get_env "CORS_ALLOWED_ORIGINS" "*" in
+    (* Split by comma and trim whitespace *)
+    String.split_on_char ',' origins_str
+    |> List.map String.trim
+    |> List.filter (fun s -> String.length s > 0)
+  in
+  
+  { photo_storage_path; database_path; port; cors_allowed_origins }
 
 (** Print configuration for debugging *)
 let print config =
@@ -43,4 +53,5 @@ let print config =
   Printf.printf "  Photo storage: %s\n" config.photo_storage_path;
   Printf.printf "  Database: %s\n" config.database_path;
   Printf.printf "  Port: %d\n" config.port;
+  Printf.printf "  CORS allowed origins: %s\n" (String.concat ", " config.cors_allowed_origins);
   flush stdout
