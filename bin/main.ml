@@ -44,6 +44,73 @@ let handle_get_metadata state request =
       let json_str = Yojson.Safe.to_string json in
       Dream.json json_str
 
+(** Handle GET /api/photos - List photos with pagination *)
+let handle_list_photos state request =
+  (* Parse query parameters with defaults *)
+  let page_str = Dream.query request "page" |> Option.value ~default:"1" in
+  let limit_str = Dream.query request "limit" |> Option.value ~default:"50" in
+  let order = Dream.query request "order" |> Option.value ~default:"desc" in
+  let sort_by = Dream.query request "sort_by" |> Option.value ~default:"date_taken" in
+  
+  (* Parse and validate page number *)
+  let page = try
+    let p = int_of_string page_str in
+    if p < 1 then 1 else p
+  with _ -> 1
+  in
+  
+  (* Parse and validate limit *)
+  let limit = try
+    let l = int_of_string limit_str in
+    if l < 1 then 50
+    else if l > 100 then 100
+    else l
+  with _ -> 50
+  in
+  
+  (* Validate order parameter *)
+  let validated_order = match order with
+    | "asc" | "desc" -> order
+    | _ -> "desc"
+  in
+  
+  (* Validate sort_by parameter *)
+  let validated_sort_by = match sort_by with
+    | "date_taken" | "created_at" -> sort_by
+    | _ -> "date_taken"
+  in
+  
+  (* Query database with pagination *)
+  let* (photos, total) = Database.get_photos_paginated 
+    state.db 
+    ~page 
+    ~limit 
+    ~order:validated_order 
+    ~sort_by:validated_sort_by 
+  in
+  
+  (* Calculate pagination metadata *)
+  let total_pages = if total = 0 then 0 else (total + limit - 1) / limit in
+  let has_next = page < total_pages in
+  let has_prev = page > 1 in
+  
+  (* Build response JSON *)
+  let photos_json = Models.list_to_json photos in
+  let pagination_json = `Assoc [
+    ("page", `Int page);
+    ("limit", `Int limit);
+    ("total", `Int total);
+    ("total_pages", `Int total_pages);
+    ("has_next", `Bool has_next);
+    ("has_prev", `Bool has_prev);
+  ] in
+  let response_json = `Assoc [
+    ("photos", photos_json);
+    ("pagination", pagination_json);
+  ] in
+  let response_str = Yojson.Safe.to_string response_json in
+  Dream.json response_str
+
 (** Handle POST /api/photos - Upload new photo *)
 let handle_upload_photo state request =
   let* parts = Dream.multipart ~csrf:false request in
@@ -97,6 +164,7 @@ let handle_upload_photo state request =
             height;
             mime_type;
             created_at;
+            deleted_at = None;
           } in
           
           (* Save to permanent storage *)
@@ -118,6 +186,83 @@ let handle_upload_photo state request =
   | _ ->
       Dream.json ~status:`Bad_Request {|{"error": "Invalid multipart form data"}|}
 
+(** Handle DELETE /api/photos/:id - Soft delete with transaction safety *)
+let handle_delete_photo state request =
+  let id = Dream.param request "id" in
+  
+  (* Verify photo exists and is not already deleted *)
+  let* photo_opt = Database.get_photo_by_id state.db id in
+  match photo_opt with
+  | None ->
+      (* Either doesn't exist or already soft-deleted *)
+      Dream.json ~status:`Not_Found 
+        (Printf.sprintf {|{"error": "Photo not found or already deleted", "id": "%s"}|} id)
+  | Some photo ->
+      (* Transaction-safe soft delete *)
+      Lwt.catch
+        (fun () ->
+          (* Step 1: Move file to backup location *)
+          let* backup_result = Storage.backup_photo_for_delete
+            ~storage_path:state.config.photo_storage_path
+            ~id in
+          
+          match backup_result with
+          | Error msg ->
+              Logging.log ERROR "photo_delete" 
+                (Printf.sprintf "Failed to backup photo: %s" msg)
+                (`Assoc [("photo_id", `String id); ("error", `String msg)]);
+              Dream.json ~status:`Internal_Server_Error
+                (Printf.sprintf {|{"error": "%s", "id": "%s"}|} msg id)
+          | Ok backup_path ->
+              (* Step 2: Soft delete in database within transaction *)
+              Lwt.catch
+                (fun () ->
+                  let* deleted_at = Database.with_transaction state.db (fun () ->
+                    Database.soft_delete_photo state.db id
+                  ) in
+                  
+                  (* Step 3: Transaction committed successfully - move to deleted dir *)
+                  let* () = Storage.move_to_deleted 
+                    ~backup_path 
+                    ~storage_path:state.config.photo_storage_path 
+                    ~id in
+                  
+                  (* Step 4: Log structured deletion event *)
+                  Logging.log_photo_deleted 
+                    ~id 
+                    ~original_filename:photo.original_filename 
+                    ~deleted_at;
+                  
+                  (* Return simple success response *)
+                  Dream.json ~status:`OK 
+                    {|{"message": "Photo deleted successfully"}|})
+                (fun exn ->
+                  (* Database operation failed - restore the file *)
+                  Logging.log ERROR "photo_delete" 
+                    "Database soft delete failed, restoring file"
+                    (`Assoc [
+                      ("photo_id", `String id); 
+                      ("error", `String (Printexc.to_string exn))
+                    ]);
+                  
+                  let* () = Storage.restore_photo 
+                    ~backup_path 
+                    ~storage_path:state.config.photo_storage_path 
+                    ~id in
+                  
+                  Dream.json ~status:`Internal_Server_Error
+                    {|{"error": "Failed to delete photo"}|}))
+        (fun exn ->
+          (* Top-level error handler *)
+          Logging.log ERROR "photo_delete" 
+            "Delete operation failed"
+            (`Assoc [
+              ("photo_id", `String id); 
+              ("error", `String (Printexc.to_string exn))
+            ]);
+          Dream.json ~status:`Internal_Server_Error
+            {|{"error": "Internal server error"}|})
+
 (** CORS middleware to handle cross-origin requests *)
 let cors_middleware allowed_origins handler request =
   (* Check if this is a preflight OPTIONS request *)
@@ -137,7 +282,7 @@ let cors_middleware allowed_origins handler request =
       Dream.respond ~status:`No_Content
         ~headers:[
           ("Access-Control-Allow-Origin", origin_header);
-          ("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+          ("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
           ("Access-Control-Allow-Headers", "Content-Type");
           ("Access-Control-Max-Age", "86400");
         ]
@@ -159,7 +304,7 @@ let cors_middleware allowed_origins handler request =
         | _ -> "*"
       in
       Dream.add_header response "Access-Control-Allow-Origin" origin_header;
-      Dream.add_header response "Access-Control-Allow-Methods" "GET, POST, OPTIONS";
+      Dream.add_header response "Access-Control-Allow-Methods" "GET, POST, DELETE, OPTIONS";
       Dream.add_header response "Access-Control-Allow-Headers" "Content-Type";
       Lwt.return response
     else
@@ -168,9 +313,11 @@ let cors_middleware allowed_origins handler request =
 (** Setup routes *)
 let routes state = [
   Dream.get "/api/playlist" (handle_playlist state);
+  Dream.get "/api/photos" (handle_list_photos state);
   Dream.get "/api/photos/:id" (handle_get_photo state);
   Dream.get "/api/photos/:id/metadata" (handle_get_metadata state);
   Dream.post "/api/photos" (handle_upload_photo state);
+  Dream.delete "/api/photos/:id" (handle_delete_photo state);
 ]
 
 (** Main entry point *)
@@ -185,19 +332,21 @@ let () =
   Printf.printf "[INFO] Initializing database...\n";
   flush stdout;
   
-  let db = Lwt_main.run (Database.init config.database_path) in
+  let db = Lwt_main.run (Database.init config.database_path config.migrations_dir) in
   let state = { db; config } in
   
-  Printf.printf "[INFO] Server starting on http://localhost:%d\n" config.port;
+  Printf.printf "[INFO] Server starting on http://%s:%d\n" config.interface config.port;
   Printf.printf "[INFO] Routes available:\n";
-  Printf.printf "  GET  /api/playlist\n";
-  Printf.printf "  GET  /api/photos/:id\n";
-  Printf.printf "  GET  /api/photos/:id/metadata\n";
-  Printf.printf "  POST /api/photos\n";
+  Printf.printf "  GET    /api/playlist\n";
+  Printf.printf "  GET    /api/photos (paginated list)\n";
+  Printf.printf "  GET    /api/photos/:id\n";
+  Printf.printf "  GET    /api/photos/:id/metadata\n";
+  Printf.printf "  POST   /api/photos\n";
+  Printf.printf "  DELETE /api/photos/:id\n";
   Printf.printf "[INFO] Ready to serve photos!\n";
   flush stdout;
   
-  Dream.run ~port:config.port
+  Dream.run ~interface:config.interface ~port:config.port
   @@ Dream.logger
   @@ cors_middleware config.cors_allowed_origins
   @@ Dream.memory_sessions

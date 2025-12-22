@@ -8,6 +8,7 @@ type photo = {
   height : int option;
   mime_type : string;
   created_at : string;
+  deleted_at : string option;
 }
 [@@deriving yojson]
 
@@ -21,7 +22,8 @@ let of_sql_row (row : Sqlite3.Data.t array) : photo option =
        width_data;
        height_data;
        Sqlite3.Data.TEXT mime_type;
-       Sqlite3.Data.TEXT created_at |] ->
+       Sqlite3.Data.TEXT created_at;
+       deleted_at_data |] ->
       let width = match width_data with
         | Sqlite3.Data.INT w -> Some (Int64.to_int w)
         | Sqlite3.Data.NULL -> None
@@ -29,6 +31,11 @@ let of_sql_row (row : Sqlite3.Data.t array) : photo option =
       in
       let height = match height_data with
         | Sqlite3.Data.INT h -> Some (Int64.to_int h)
+        | Sqlite3.Data.NULL -> None
+        | _ -> None
+      in
+      let deleted_at = match deleted_at_data with
+        | Sqlite3.Data.TEXT dt -> Some dt
         | Sqlite3.Data.NULL -> None
         | _ -> None
       in
@@ -41,6 +48,7 @@ let of_sql_row (row : Sqlite3.Data.t array) : photo option =
         height;
         mime_type;
         created_at;
+        deleted_at;
       }
   | _ -> None
 

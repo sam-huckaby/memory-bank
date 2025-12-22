@@ -256,6 +256,227 @@ curl http://localhost:8080/api/photos/a1b2c3d4-e5f6-7890-abcd-ef1234567890/metad
 
 ---
 
+### 5. List All Photos (Paginated)
+
+**Endpoint:** `GET /api/photos`
+
+**Description:** Retrieve a paginated list of all photos, ordered by date. Perfect for building a photo browser with infinite scroll. By default, photos are sorted by the date they were taken (newest first), but you can customize the sorting to use upload date instead.
+
+**Query Parameters:**
+- `page` (optional, default: `1`) - Page number, 1-based indexing (minimum: 1)
+- `limit` (optional, default: `50`) - Number of photos per page (minimum: 1, maximum: 100)
+- `order` (optional, default: `"desc"`) - Sort order: `"asc"` (oldest first) or `"desc"` (newest first)
+- `sort_by` (optional, default: `"date_taken"`) - Sort field: `"date_taken"` or `"created_at"`
+
+**Request Examples:**
+
+Get first page with defaults (50 photos, sorted by date_taken descending):
+```bash
+curl http://localhost:8080/api/photos
+```
+
+Get second page with 20 photos per page:
+```bash
+curl "http://localhost:8080/api/photos?page=2&limit=20"
+```
+
+Get photos sorted by upload date (created_at) in ascending order:
+```bash
+curl "http://localhost:8080/api/photos?sort_by=created_at&order=asc"
+```
+
+Get third page, sorted by date taken, oldest first:
+```bash
+curl "http://localhost:8080/api/photos?page=3&sort_by=date_taken&order=asc"
+```
+
+**Response (200 OK):**
+```json
+{
+  "photos": [
+    {
+      "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "original_filename": "sunset.jpg",
+      "date_taken": "2023-12-13T14:30:45Z",
+      "file_size": 2048576,
+      "width": 4032,
+      "height": 3024,
+      "mime_type": "image/jpeg",
+      "created_at": "2024-12-13T20:15:30Z"
+    },
+    {
+      "id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+      "original_filename": "beach.heic",
+      "date_taken": "2023-11-20T09:15:22Z",
+      "file_size": 1524288,
+      "width": 3024,
+      "height": 4032,
+      "mime_type": "image/heic",
+      "created_at": "2024-12-13T20:16:45Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 50,
+    "total": 150,
+    "total_pages": 3,
+    "has_next": true,
+    "has_prev": false
+  }
+}
+```
+
+**Pagination Metadata:**
+- `page` - Current page number
+- `limit` - Number of items per page
+- `total` - Total number of photos in database
+- `total_pages` - Total number of pages available
+- `has_next` - Boolean indicating if there's a next page
+- `has_prev` - Boolean indicating if there's a previous page
+
+**Notes:**
+- Invalid query parameters are automatically sanitized to safe defaults
+- Pages are 1-indexed (first page is `page=1`)
+- Empty database returns `{"photos": [], "pagination": {...}}`
+- Photos are efficiently queried using database indexes on both `date_taken` and `created_at`
+
+**NextJS Infinite Scroll Integration:**
+
+Here's a pattern for implementing infinite scroll in a NextJS app:
+
+```typescript
+// Example React component with infinite scroll
+import { useState, useEffect } from 'react';
+import InfiniteScroll from 'react-infinite-scroll-component';
+
+interface Photo {
+  id: string;
+  original_filename: string;
+  date_taken: string;
+  file_size: number;
+  width?: number;
+  height?: number;
+  mime_type: string;
+  created_at: string;
+}
+
+interface Pagination {
+  page: number;
+  limit: number;
+  total: number;
+  total_pages: number;
+  has_next: boolean;
+  has_prev: boolean;
+}
+
+export default function PhotoGallery() {
+  const [photos, setPhotos] = useState<Photo[]>([]);
+  const [pagination, setPagination] = useState<Pagination | null>(null);
+  const [page, setPage] = useState(1);
+  
+  const API_URL = 'http://localhost:8080';
+  
+  // Fetch initial photos
+  useEffect(() => {
+    fetchPhotos(1);
+  }, []);
+  
+  const fetchPhotos = async (pageNum: number) => {
+    const response = await fetch(
+      `${API_URL}/api/photos?page=${pageNum}&limit=50&order=desc&sort_by=date_taken`
+    );
+    const data = await response.json();
+    
+    if (pageNum === 1) {
+      setPhotos(data.photos);
+    } else {
+      setPhotos(prev => [...prev, ...data.photos]);
+    }
+    setPagination(data.pagination);
+  };
+  
+  const loadMore = () => {
+    if (pagination?.has_next) {
+      const nextPage = page + 1;
+      setPage(nextPage);
+      fetchPhotos(nextPage);
+    }
+  };
+  
+  return (
+    <InfiniteScroll
+      dataLength={photos.length}
+      next={loadMore}
+      hasMore={pagination?.has_next ?? false}
+      loader={<h4>Loading...</h4>}
+      endMessage={<p>No more photos</p>}
+    >
+      <div className="grid grid-cols-3 gap-4">
+        {photos.map(photo => (
+          <div key={photo.id}>
+            <img 
+              src={`${API_URL}/api/photos/${photo.id}`}
+              alt={photo.original_filename}
+              className="w-full h-auto"
+            />
+            <p className="text-sm">{photo.original_filename}</p>
+            <p className="text-xs text-gray-500">
+              {new Date(photo.date_taken).toLocaleDateString()}
+            </p>
+          </div>
+        ))}
+      </div>
+    </InfiniteScroll>
+  );
+}
+```
+
+**React Query (TanStack Query) Pattern:**
+
+For more robust data fetching with caching:
+
+```typescript
+import { useInfiniteQuery } from '@tanstack/react-query';
+
+const fetchPhotosPage = async ({ pageParam = 1 }) => {
+  const response = await fetch(
+    `http://localhost:8080/api/photos?page=${pageParam}&limit=50`
+  );
+  return response.json();
+};
+
+export default function PhotoGallery() {
+  const {
+    data,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    status,
+  } = useInfiniteQuery({
+    queryKey: ['photos'],
+    queryFn: fetchPhotosPage,
+    getNextPageParam: (lastPage) => 
+      lastPage.pagination.has_next ? lastPage.pagination.page + 1 : undefined,
+  });
+
+  // Flatten all pages into single photo array
+  const photos = data?.pages.flatMap(page => page.photos) ?? [];
+  
+  return (
+    <InfiniteScroll
+      dataLength={photos.length}
+      next={fetchNextPage}
+      hasMore={!!hasNextPage}
+      loader={<h4>Loading...</h4>}
+    >
+      {/* Render photos */}
+    </InfiniteScroll>
+  );
+}
+```
+
+---
+
 ## Testing Without Web Interface
 
 ### Step 1: Upload Photos
@@ -314,6 +535,82 @@ PHOTO_ID="a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 curl http://localhost:8080/api/photos/$PHOTO_ID/metadata | jq
 ```
 
+### Step 5: Delete a Photo
+
+Delete a photo from the collection:
+
+```bash
+PHOTO_ID="a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+curl -X DELETE http://localhost:8080/api/photos/$PHOTO_ID | jq
+```
+
+### 6. Delete a Photo
+
+**Endpoint:** `DELETE /api/photos/:id`
+
+**Description:** Soft delete a photo from the collection. The photo is marked as deleted in the database and the file is moved to a `deleted/` subdirectory for potential recovery. Deleted photos are immediately excluded from all API responses (playlist, list, get).
+
+**Request:**
+```bash
+curl -X DELETE http://localhost:8080/api/photos/a1b2c3d4-e5f6-7890-abcd-ef1234567890
+```
+
+**Response (200 OK):**
+```json
+{
+  "message": "Photo deleted successfully"
+}
+```
+
+**Error Responses:**
+
+404 Not Found - Photo doesn't exist or already deleted:
+```json
+{
+  "error": "Photo not found or already deleted",
+  "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+}
+```
+
+500 Internal Server Error - Server error during deletion:
+```json
+{
+  "error": "Failed to delete photo"
+}
+```
+
+**Notes:**
+- Uses soft delete approach: photos are marked as deleted but files are preserved
+- Deleted files are moved to `PHOTO_STORAGE_PATH/deleted/` directory
+- Transaction-safe: database and filesystem stay in sync (rollback on failure)
+- Deleted photos are automatically excluded from all API endpoints
+- Structured deletion events are logged to stdout in JSON format
+- Attempting to delete the same photo twice returns 404
+- Physical cleanup of soft-deleted photos can be implemented separately
+
+**Deletion Process:**
+1. Photo is moved to temporary backup location
+2. Database transaction marks photo as deleted
+3. On success, file is moved to `deleted/` directory
+4. On failure, file is restored from backup
+5. Structured log event is written
+
+**Structured Log Output:**
+```json
+{
+  "timestamp": "2025-12-20T15:30:45.000Z",
+  "level": "INFO",
+  "component": "photo_management",
+  "message": "Photo soft deleted successfully",
+  "details": {
+    "photo_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "original_filename": "sunset.jpg",
+    "deleted_at": "2025-12-20T15:30:45.000Z",
+    "operation": "soft_delete"
+  }
+}
+```
+
 ---
 
 ## Example: Complete Workflow
@@ -341,6 +638,14 @@ open downloaded.jpg
 # 5. Check metadata
 echo "Photo metadata:"
 curl -s http://localhost:8080/api/photos/$PHOTO_ID/metadata | jq
+
+# 6. Delete the photo
+echo "Deleting photo..."
+curl -X DELETE -s http://localhost:8080/api/photos/$PHOTO_ID | jq
+
+# 7. Verify deletion (should return 404)
+echo "Attempting to get deleted photo:"
+curl -s http://localhost:8080/api/photos/$PHOTO_ID/metadata | jq
 ```
 
 ---
@@ -358,9 +663,16 @@ CREATE TABLE photos (
   width INTEGER,                    -- Pixels (nullable if extraction fails)
   height INTEGER,                   -- Pixels (nullable if extraction fails)
   mime_type TEXT NOT NULL,          -- image/jpeg, image/png, image/heic, etc.
-  created_at TEXT NOT NULL          -- ISO 8601 upload timestamp
+  created_at TEXT NOT NULL,         -- ISO 8601 upload timestamp
+  deleted_at TEXT                   -- ISO 8601 deletion timestamp (NULL = active)
 );
+
+CREATE INDEX idx_date_taken ON photos(date_taken);
+CREATE INDEX idx_created_at ON photos(created_at);
+CREATE INDEX idx_deleted_at ON photos(deleted_at);
 ```
+
+**Soft Delete:** Photos with a non-NULL `deleted_at` timestamp are automatically excluded from all queries. The database is automatically migrated on server startup to add the `deleted_at` column if upgrading from an older version.
 
 ---
 
@@ -370,15 +682,21 @@ Photos are stored in the directory specified by `PHOTO_STORAGE_PATH`:
 
 ```
 /path/to/photos/
-  a1b2c3d4-e5f6-7890-abcd-ef1234567890
-  b2c3d4e5-f6a7-8901-bcde-f12345678901
-  c3d4e5f6-a7b8-9012-cdef-123456789012
+  a1b2c3d4-e5f6-7890-abcd-ef1234567890    # Active photo
+  b2c3d4e5-f6a7-8901-bcde-f12345678901    # Active photo
+  c3d4e5f6-a7b8-9012-cdef-123456789012    # Active photo
+  backups/                                  # Temporary during deletion transactions
+  deleted/                                  # Soft-deleted photos
+    d4e5f6a7-b8c9-0123-def1-234567890123
 ```
 
 **Notes:**
 - No file extensions (use MIME type from database)
 - UUID ensures no filename conflicts
-- Flat directory structure for simple management
+- Active photos stored in root directory
+- Soft-deleted photos moved to `deleted/` subdirectory
+- `backups/` subdirectory used during deletion transactions (normally empty)
+- Both subdirectories are created automatically on server startup
 
 ---
 
@@ -503,7 +821,10 @@ Planned features (not yet implemented):
 - Search by filename or metadata
 - Duplicate detection
 - Batch upload endpoint
-- Photo deletion endpoint
+- Advanced sorting options (by file size, dimensions, etc.)
+- Restore deleted photos endpoint
+- Permanent deletion/cleanup of soft-deleted photos
+- View soft-deleted photos endpoint
 
 ---
 

@@ -7,5 +7,6 @@
   yojson
   lwt
   lwt.unix
-  unix)
+  unix
+  str)
  (preprocess (pps ppx_deriving_yojson lwt_ppx)))

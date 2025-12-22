@@ -1,2 +1,9 @@
 (test
- (name test_memory_bank))
+ (name test_migrations)
+ (libraries
+  memory_bank
+  alcotest
+  lwt
+  lwt.unix
+  sqlite3
+  unix))

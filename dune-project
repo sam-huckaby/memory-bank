@@ -28,7 +28,8 @@
   yojson
   (ppx_deriving_yojson (>= 3.7.0))
   lwt
-  lwt_ppx)
+  lwt_ppx
+  (alcotest (and :with-test (>= 1.7.0))))
  (tags
   (photo api rest ocaml dream sqlite)))
 

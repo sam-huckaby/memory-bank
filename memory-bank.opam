@@ -20,6 +20,7 @@ depends: [
   "ppx_deriving_yojson" {>= "3.7.0"}
   "lwt"
   "lwt_ppx"
+  "alcotest" {with-test & >= "1.7.0"}
   "odoc" {with-doc}
 ]
 build: [
