@@ -1,50 +1,51 @@
-# 1. Use raw Alpine for ARMv6 support
-FROM --platform=linux/arm/v6 alpine:3.19
+# 1. Base Image: Strictly emulating Raspberry Pi OS (Bullseye)
+# We use balenalib because they provide specific images for the Pi 1/Zero CPU.
+FROM --platform=linux/arm/v6 balenalib/rpi-raspbian:bullseye
 
-# 2. Install system build tools AND all library dependencies
-RUN apk add --no-cache \
-    opam build-base git curl patch rsync linux-headers \
-    gmp-dev libffi-dev sqlite-dev sqlite-static pkgconf \
-    openssl-dev openssl-libs-static libev-dev zlib-static
+# 2. Install System Build Tools & Libraries
+# Note: We use 'apt-get' now (Debian style) instead of 'apk'.
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    git \
+    unzip \
+    rsync \
+    pkg-config \
+    # OCaml Dependencies
+    libgmp-dev \
+    libffi-dev \
+    # Your App Dependencies (Dynamic Libraries)
+    libssl-dev \
+    libev-dev \
+    libsqlite3-dev \
+    zlib1g-dev \
+    # Opam (Install from official repo)
+    opam
 
-# 3. DEFINE STRICT FLAGS *BEFORE* OPAM INIT
-# This ensures that ANY package compiled by Opam (including the compiler itself)
-# sees these flags.
-ENV CFLAGS="-march=armv6zk -mcpu=arm1176jzf-s -mfpu=vfp -mfloat-abi=hard -marm"
-ENV OCAMLPARAM="_,cclib=-static"
+# 3. Initialize Opam & Install OCaml 5.1.0
+# WARNING: This step compiles the OCaml compiler from source on emulated ARMv6.
+# This will be SLOW (30-60 mins), but it guarantees a perfect CPU match.
+RUN opam init --disable-sandboxing --compiler=5.1.0 --auto-setup --yes
 
-# 4. Initialize Opam
-# We pass the flags here to be safe, though ENV CFLAGS above usually covers it.
-RUN opam init --disable-sandboxing --auto-setup --yes
-
-# 5. Create the OCaml Switch
-RUN opam switch create 5.1.0 --yes
-
-# 6. Set working directory
+# 4. Set Working Directory
 WORKDIR /app
 
-# 7. PRE-CONFIGURE DUNE WORKSPACE
-# We do this NOW so that if any opam packages use Dune, they might pick it up.
-# We also ensure the final build uses it.
-RUN echo '(lang dune 3.0)' > dune-workspace && \
-    echo '(context (default (name rpi_target) (env (_ (c_flags :standard -march=armv6zk -mcpu=arm1176jzf-s -mfpu=vfp -mfloat-abi=hard -marm) (link_flags :standard -cclib -static)))))' >> dune-workspace
-
-# 8. Copy dependency files
+# 5. Copy Dependency Files
 COPY *.opam dune-project ./
 
-# 9. INSTALL DEPENDENCIES (CRITICAL STEP)
-# Because CFLAGS is set globally above, packages like mirage-crypto 
-# will now be compiled with -mfpu=vfp instead of NEON.
+# 6. Install Dependencies
+# We do NOT need static linking anymore because the Build OS == Run OS.
+# The libraries on your Pi (Bullseye) will match these libraries exactly.
 RUN eval $(opam env) && \
-    opam install . --deps-only --with-test --yes --no-depexts
+    opam install . --deps-only --with-test --yes
 
-# 10. Copy source and build
+# 7. Copy Source Code
 COPY . .
 
-# 11. BUILD
-# We use the workspace we created in step 7.
+# 8. Build the Application
+# We use the default profile. No special flags needed!
 RUN eval $(opam env) && \
     dune build --profile=release
 
-# 12. VERIFY
-RUN file _build/rpi_target/bin/main.exe
+# OLD 9. Verify Architecture
+#RUN file _build/default/bin/main.exe
