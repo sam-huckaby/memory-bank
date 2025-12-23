@@ -1,56 +1,50 @@
 # 1. Use raw Alpine for ARMv6 support
 FROM --platform=linux/arm/v6 alpine:3.19
 
-# 2. Install tools AND STATIC versions of libraries
-# Added: openssl-libs-static, sqlite-static, zlib-static
-# Note: libev-dev and gmp-dev usually include the static .a files by default in Alpine
+# 2. Install system build tools AND all library dependencies
 RUN apk add --no-cache \
-    opam \
-    build-base \
-    git \
-    curl \
-    patch \
-    rsync \
-    linux-headers \
-    gmp-dev \
-    libffi-dev \
-    sqlite-dev \
-    sqlite-static \
-    pkgconf \
-    openssl-dev \
-    openssl-libs-static \
-    libev-dev \
-    zlib-static
+    opam build-base git curl patch rsync linux-headers \
+    gmp-dev libffi-dev sqlite-dev sqlite-static pkgconf \
+    openssl-dev openssl-libs-static libev-dev zlib-static
 
-# 3. Initialize Opam
+# 3. DEFINE STRICT FLAGS *BEFORE* OPAM INIT
+# This ensures that ANY package compiled by Opam (including the compiler itself)
+# sees these flags.
+ENV CFLAGS="-march=armv6zk -mcpu=arm1176jzf-s -mfpu=vfp -mfloat-abi=hard -marm"
+ENV OCAMLPARAM="_,cclib=-static"
+
+# 4. Initialize Opam
+# We pass the flags here to be safe, though ENV CFLAGS above usually covers it.
 RUN opam init --disable-sandboxing --auto-setup --yes
 
-# 4. Create the OCaml Switch
+# 5. Create the OCaml Switch
 RUN opam switch create 5.1.0 --yes
 
-# 5. Set working directory
+# 6. Set working directory
 WORKDIR /app
 
-# 6. Copy dependency files first
+# 7. PRE-CONFIGURE DUNE WORKSPACE
+# We do this NOW so that if any opam packages use Dune, they might pick it up.
+# We also ensure the final build uses it.
+RUN echo '(lang dune 3.0)' > dune-workspace && \
+    echo '(context (default (name rpi_target) (env (_ (c_flags :standard -march=armv6zk -mcpu=arm1176jzf-s -mfpu=vfp -mfloat-abi=hard -marm) (link_flags :standard -cclib -static)))))' >> dune-workspace
+
+# 8. Copy dependency files
 COPY *.opam dune-project ./
 
-# 7. Install dependencies
+# 9. INSTALL DEPENDENCIES (CRITICAL STEP)
+# Because CFLAGS is set globally above, packages like mirage-crypto 
+# will now be compiled with -mfpu=vfp instead of NEON.
 RUN eval $(opam env) && \
     opam install . --deps-only --with-test --yes --no-depexts
 
-# 8. Copy source
+# 10. Copy source and build
 COPY . .
 
-# 9. CONFIGURE STATIC LINKING
-# We create a dune-workspace file that tells the compiler to use '-static'
-# This forces gcc to use the .a libraries instead of .so
-RUN echo '(lang dune 3.0)' > dune-workspace && \
-    echo '(context (default (env (_ (link_flags :standard -cclib -static)))))' >> dune-workspace
-
-# 10. Build
+# 11. BUILD
+# We use the workspace we created in step 7.
 RUN eval $(opam env) && \
     dune build --profile=release
 
-# 11. Verify
-# The output of this MUST say "statically linked"
-RUN file _build/default/bin/main.exe
+# 12. VERIFY
+RUN file _build/rpi_target/bin/main.exe
