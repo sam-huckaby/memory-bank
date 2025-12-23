@@ -1,0 +1,44 @@
+# 1. Use raw Alpine for ARMv6 support
+FROM --platform=linux/arm/v6 alpine:3.19
+
+# 2. Install system build tools AND all library dependencies
+# Added: openssl-dev, libev-dev
+RUN apk add --no-cache \
+    opam \
+    build-base \
+    git \
+    curl \
+    patch \
+    rsync \
+    linux-headers \
+    gmp-dev \
+    libffi-dev \
+    sqlite-dev \
+    pkgconf \
+    openssl-dev \
+    libev-dev
+
+# 3. Initialize Opam
+RUN opam init --disable-sandboxing --auto-setup --yes
+
+# 4. Create the OCaml Switch
+RUN opam switch create 5.1.0 --yes
+
+# 5. Set working directory
+WORKDIR /app
+
+# 6. Copy dependency files first
+COPY *.opam dune-project ./
+
+# 7. Install OCaml dependencies
+# We use --no-depexts because we already installed the system libs above
+RUN eval $(opam env) && \
+    opam install . --deps-only --with-test --yes --no-depexts
+
+# 8. Copy source and build
+COPY . .
+RUN eval $(opam env) && \
+    dune build --profile=release
+
+# 9. Verify the binary architecture
+RUN file _build/default/bin/main.exe

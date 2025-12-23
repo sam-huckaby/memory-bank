@@ -5,7 +5,7 @@ description:
   "REST API for managing and serving photos with EXIF metadata extraction"
 maintainer: ["Sam Huckaby <samhuckaby@gmail.com>"]
 authors: ["Sam Huckaby <samhuckaby@gmail.com>"]
-license: "LICENSE"
+license: "MIT"
 tags: ["photo" "api" "rest" "ocaml" "dream" "sqlite"]
 homepage: "https://github.com/sam-huckaby/memory-bank"
 doc: "https://url/to/documentation"
