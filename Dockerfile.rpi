@@ -1,8 +1,9 @@
 # 1. Use raw Alpine for ARMv6 support
 FROM --platform=linux/arm/v6 alpine:3.19
 
-# 2. Install system build tools AND all library dependencies
-# Added: openssl-dev, libev-dev
+# 2. Install tools AND STATIC versions of libraries
+# Added: openssl-libs-static, sqlite-static, zlib-static
+# Note: libev-dev and gmp-dev usually include the static .a files by default in Alpine
 RUN apk add --no-cache \
     opam \
     build-base \
@@ -14,9 +15,12 @@ RUN apk add --no-cache \
     gmp-dev \
     libffi-dev \
     sqlite-dev \
+    sqlite-static \
     pkgconf \
     openssl-dev \
-    libev-dev
+    openssl-libs-static \
+    libev-dev \
+    zlib-static
 
 # 3. Initialize Opam
 RUN opam init --disable-sandboxing --auto-setup --yes
@@ -30,15 +34,23 @@ WORKDIR /app
 # 6. Copy dependency files first
 COPY *.opam dune-project ./
 
-# 7. Install OCaml dependencies
-# We use --no-depexts because we already installed the system libs above
+# 7. Install dependencies
 RUN eval $(opam env) && \
     opam install . --deps-only --with-test --yes --no-depexts
 
-# 8. Copy source and build
+# 8. Copy source
 COPY . .
+
+# 9. CONFIGURE STATIC LINKING
+# We create a dune-workspace file that tells the compiler to use '-static'
+# This forces gcc to use the .a libraries instead of .so
+RUN echo '(lang dune 3.0)' > dune-workspace && \
+    echo '(context (default (env (_ (link_flags :standard -cclib -static)))))' >> dune-workspace
+
+# 10. Build
 RUN eval $(opam env) && \
     dune build --profile=release
 
-# 9. Verify the binary architecture
+# 11. Verify
+# The output of this MUST say "statically linked"
 RUN file _build/default/bin/main.exe
