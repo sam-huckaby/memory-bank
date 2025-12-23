@@ -1,51 +1,74 @@
-# 1. Base Image: Strictly emulating Raspberry Pi OS (Bullseye)
-# We use balenalib because they provide specific images for the Pi 1/Zero CPU.
-FROM --platform=linux/arm/v6 balenalib/rpi-raspbian:bullseye
+# 1. Base Image: Alpine (Musl for static linking)
+FROM --platform=linux/arm/v6 alpine:3.19
 
-# 2. Install System Build Tools & Libraries
-# Note: We use 'apt-get' now (Debian style) instead of 'apk'.
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    git \
-    unzip \
-    rsync \
-    pkg-config \
-    # OCaml Dependencies
-    libgmp-dev \
-    libffi-dev \
-    # Your App Dependencies (Dynamic Libraries)
-    libssl-dev \
-    libev-dev \
-    libsqlite3-dev \
-    zlib1g-dev \
-    # Opam (Install from official repo)
+# 2. Install Build Tools
+# Removed: libev-dev, openssl-dev (We build them manually)
+RUN apk add --no-cache \
+    build-base git curl linux-headers perl \
+    gmp-dev libffi-dev pkgconf zlib-static \
+    sqlite-dev sqlite-static \
     opam
 
-# 3. Initialize Opam & Install OCaml 5.1.0
-# WARNING: This step compiles the OCaml compiler from source on emulated ARMv6.
-# This will be SLOW (30-60 mins), but it guarantees a perfect CPU match.
-RUN opam init --disable-sandboxing --compiler=5.1.0 --auto-setup --yes
+# 3. DEFINE STRICT CPU FLAGS
+# These flags force the compiler to NEVER generate ARMv7/NEON code.
+ENV CFLAGS="-march=armv6zk -mcpu=arm1176jzf-s -mfpu=vfp -mfloat-abi=hard -marm"
+ENV CXXFLAGS="-march=armv6zk -mcpu=arm1176jzf-s -mfpu=vfp -mfloat-abi=hard -marm"
 
-# 4. Set Working Directory
+WORKDIR /tmp
+
+# 4. MANUALLY BUILD OPENSSL (ARMv6 Static)
+RUN curl -L https://github.com/openssl/openssl/releases/download/openssl-3.1.4/openssl-3.1.4.tar.gz | tar xz && \
+    cd openssl-3.1.4 && \
+    ./Configure linux-generic32 no-shared no-dso no-tests \
+    --prefix=/usr/local --openssldir=/usr/local/ssl \
+    "$CFLAGS" && \
+    make -j$(nproc) && \
+    make install && \
+    cd .. && rm -rf openssl-3.1.4
+
+# 5. MANUALLY BUILD LIBEV (ARMv6 Static)
+# We disable shared libraries to ensure we only get a static .a file
+RUN curl -L http://dist.schmorp.de/libev/libev-4.33.tar.gz | tar xz && \
+    cd libev-4.33 && \
+    ./configure --prefix=/usr/local --disable-shared --enable-static && \
+    make -j$(nproc) && \
+    make install && \
+    cd .. && rm -rf libev-4.33
+
+# 6. Initialize Opam
+RUN opam init --disable-sandboxing --auto-setup --yes
+
+# 7. Create Switch
+RUN opam switch create 5.1.0 --yes
+
 WORKDIR /app
 
-# 5. Copy Dependency Files
+# OLD 8. Setup Dune for Static Linking
+# We explicitly point to /usr/local/include and /usr/local/lib
+#RUN echo '(lang dune 3.0)' > dune-workspace && \
+#    echo '(context (default (name rpi_target) (env (_ (c_flags :standard -I/usr/local/include) (link_flags :standard -L/usr/local/lib -cclib -static)))))' >> dune-workspace
+
+# 8. Setup Dune for Static Linking (FIXED)
+# We added '-cclib' before '-L/usr/local/lib' so ocamlc accepts it.
+RUN echo '(lang dune 3.0)' > dune-workspace && \
+    echo '(context (default (name rpi_target) (env (_ (c_flags :standard -I/usr/local/include) (link_flags :standard -cclib -L/usr/local/lib -cclib -static)))))' >> dune-workspace
+
+# 9. Dependencies
 COPY *.opam dune-project ./
 
-# 6. Install Dependencies
-# We do NOT need static linking anymore because the Build OS == Run OS.
-# The libraries on your Pi (Bullseye) will match these libraries exactly.
+# 10. Install Dependencies
+# CRITICAL FIX: We export these variables so 'conf-libev' and others find the custom libs
+ENV C_INCLUDE_PATH="/usr/local/include"
+ENV LIBRARY_PATH="/usr/local/lib"
+ENV PKG_CONFIG_PATH="/usr/local/lib/pkgconfig"
+
 RUN eval $(opam env) && \
-    opam install . --deps-only --with-test --yes
+    opam install . --deps-only --with-test --yes --no-depexts
 
-# 7. Copy Source Code
+# 11. Build App
 COPY . .
-
-# 8. Build the Application
-# We use the default profile. No special flags needed!
 RUN eval $(opam env) && \
     dune build --profile=release
 
-# OLD 9. Verify Architecture
-#RUN file _build/default/bin/main.exe
+# 12. Verify
+RUN file _build/rpi_target/bin/main.exe
