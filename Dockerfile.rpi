@@ -38,18 +38,14 @@ RUN curl -L http://dist.schmorp.de/libev/libev-4.33.tar.gz | tar xz && \
 # 6. Initialize Opam
 RUN opam init --disable-sandboxing --auto-setup --yes
 
-# 7. Create Switch
-RUN opam switch create 5.1.0 --yes
+# 7. Create Switch (CHANGED to 4.14.2)
+# We use 4.14 because OCaml 5+ runtime emits atomic instructions
+# that cause SIGILL (Illegal Instruction) on ARMv6 hardware.
+RUN opam switch create 4.14.2 --yes
 
 WORKDIR /app
 
-# OLD 8. Setup Dune for Static Linking
-# We explicitly point to /usr/local/include and /usr/local/lib
-#RUN echo '(lang dune 3.0)' > dune-workspace && \
-#    echo '(context (default (name rpi_target) (env (_ (c_flags :standard -I/usr/local/include) (link_flags :standard -L/usr/local/lib -cclib -static)))))' >> dune-workspace
-
-# 8. Setup Dune for Static Linking (FIXED)
-# We added '-cclib' before '-L/usr/local/lib' so ocamlc accepts it.
+# 8. Setup Dune for Static Linking (Kept your fixed version)
 RUN echo '(lang dune 3.0)' > dune-workspace && \
     echo '(context (default (name rpi_target) (env (_ (c_flags :standard -I/usr/local/include) (link_flags :standard -cclib -L/usr/local/lib -cclib -static)))))' >> dune-workspace
 
