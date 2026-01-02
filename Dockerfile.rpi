@@ -38,10 +38,19 @@ RUN curl -L http://dist.schmorp.de/libev/libev-4.33.tar.gz | tar xz && \
 # 6. Initialize Opam
 RUN opam init --disable-sandboxing --auto-setup --yes
 
-# 7. Create Switch (CHANGED to 4.14.2)
-# We use 4.14 because OCaml 5+ runtime emits atomic instructions
-# that cause SIGILL (Illegal Instruction) on ARMv6 hardware.
-RUN opam switch create 4.14.2 --yes
+# 7. Create Switch (FIXED)
+# We use the 'ocaml-option-static' package to force static linking.
+# This replaces the invalid --config flag.
+RUN CFLAGS="-march=armv6zk -mcpu=arm1176jzf-s -mfpu=vfp -mfloat-abi=hard -marm" \
+    opam switch create 4.14.2+options --yes \
+    --packages=ocaml-variants.4.14.2+options,ocaml-option-static \
+    --no-depexts
+
+# TEMP: Sanity Check (Add this immediately after Step 7)
+WORKDIR /tmp
+RUN echo 'print_endline "Hello Pi Zero"' > hello.ml && \
+    eval $(opam env) && \
+    ocamlopt -ccopt -static -o hello hello.ml
 
 WORKDIR /app
 
